@@ -5,3 +5,6 @@
 - NO crear ni editar a mano archivos .meta, .unity ni .prefab. Si algo requiere el editor, dime los pasos.
 - Trabaja en pasos pequeños, no agregues funciones que no pedí y explícame qué cambiaste.
 - Por ahora solo placeholders: cuadrados de colores y texto, sin arte.
+
+## Reglas del juego
+Las reglas completas están en docs/REGLAS.md. Léelas antes de tocar lógica de cartas, tablero o turnos, y no las cambies sin que yo lo pida.
