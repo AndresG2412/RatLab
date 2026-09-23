@@ -1,0 +1,5 @@
+# Valores de Card07 - Nivel 2
+Norte=1
+Este=1
+Sur=1
+Oeste=1

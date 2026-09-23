@@ -1,0 +1,5 @@
+# Valores de Card02 - Nivel 1
+Norte=2
+Este=1
+Sur=3
+Oeste=1

@@ -1,0 +1,88 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d1b2d9cf8ef3f3a45b3f7e49af183a90, type: 3}
+  m_Name: CardCatalog
+  m_EditorClassIdentifier: Assembly-CSharp::RatLab.Data.CardCatalog
+  enemyBack: {fileID: 5649704490374122337, guid: d0ae712a62f321b4f9a16fe3cd99b6d2, type: 3}
+  cards:
+  - id: Card01
+    level: 1
+    data:
+      image: {fileID: 8229768020420500662, guid: 7e3e994e3fe86de4aa0da834030633b8, type: 3}
+      north: 1
+      east: 2
+      south: 1
+      west: 2
+  - id: Card01
+    level: 2
+    data:
+      image: {fileID: 3687208622047964342, guid: ba20f2166ab3bb945aeec2556e4e669e, type: 3}
+      north: 2
+      east: 3
+      south: 2
+      west: 4
+  - id: Card01
+    level: 3
+    data:
+      image: {fileID: 2154834563459864525, guid: cfe474ef028c1fa4c91b7f80109121fd, type: 3}
+      north: 2
+      east: 4
+      south: 4
+      west: 5
+  - id: Card02
+    level: 1
+    data:
+      image: {fileID: 5834248166999299148, guid: 2fe9ebd5f36ab734585bad1d3658f389, type: 3}
+      north: 2
+      east: 1
+      south: 3
+      west: 1
+  - id: Card02
+    level: 2
+    data:
+      image: {fileID: 2193416433539685752, guid: cccb84f36bbbb034ca08f311ae79afa0, type: 3}
+      north: 3
+      east: 2
+      south: 4
+      west: 1
+  - id: Card02
+    level: 3
+    data:
+      image: {fileID: -4420299074049143130, guid: 277cfd96afc7157408d5417d25f3fda5, type: 3}
+      north: 5
+      east: 3
+      south: 6
+      west: 3
+  - id: Card03
+    level: 1
+    data:
+      image: {fileID: 1539073376847924381, guid: 9cd7b782f890789438da2e97256fa56f, type: 3}
+      north: 3
+      east: 1
+      south: 1
+      west: 1
+  - id: Card03
+    level: 2
+    data:
+      image: {fileID: -205430717586759394, guid: cb98d4a966ecfa34a9aafc285b2365ab, type: 3}
+      north: 5
+      east: 2
+      south: 3
+      west: 2
+  - id: Card03
+    level: 3
+    data:
+      image: {fileID: -2340667976990002233, guid: e9fbb7a58f73bbc4ea901aeb50e672ea, type: 3}
+      north: 7
+      east: 5
+      south: 6
+      west: 5

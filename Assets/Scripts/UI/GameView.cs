@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using RatLab.Core;
+using RatLab.Data;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -14,30 +15,41 @@ public sealed class GameView : MonoBehaviour
     private static readonly Color PlayerColor = new Color32(55, 110, 200, 255);
     private static readonly Color EnemyColor = new Color32(190, 65, 65, 255);
     private static readonly Color EmptyCellColor = new Color32(125, 130, 135, 255);
+    private static readonly Color HighlightCellColor = new Color32(190, 195, 200, 255);
     private static readonly Color BoardCardTextColor = Color.white;
 
     [SerializeField] private string mainMenuSceneName = "MainMenu";
 
     private Board board = new Board();
     private readonly System.Random random = new System.Random();
-    private readonly Card[] playerHand = new Card[HandSize];
-    private readonly Card[] enemyHand = new Card[HandSize];
+    private readonly CardVisualData[] playerHand = new CardVisualData[HandSize];
+    private readonly CardVisualData[] enemyHand = new CardVisualData[HandSize];
     private readonly bool[] usedPlayerCards = new bool[HandSize];
     private readonly bool[] usedEnemyCards = new bool[HandSize];
     private readonly HandCardView[] playerCardViews = new HandCardView[HandSize];
     private readonly HandCardView[] enemyCardViews = new HandCardView[HandSize];
     private readonly BoardCellView[] boardCellViews = new BoardCellView[Board.CellCount];
+    private readonly Sprite[] boardSprites = new Sprite[Board.CellCount];
 
+    private CardCatalog cardCatalog;
+    private bool missingCatalogWarningLogged;
     private TextMeshProUGUI turnText;
+    private RectTransform dragLayer;
     private Owner currentTurn = Owner.Player;
-    private int selectedCardIndex = -1;
-    private Card selectedCard;
     private bool gameOver;
     private bool enemyThinking;
     private Coroutine enemyTurnCoroutine;
+    private Coroutine cardReturnCoroutine;
+    private DraggableCardView activePlayerDrag;
+    private DraggableCardView returningPlayerCard;
+    private GameObject activeEnemyAnimationObject;
+    private int highlightedCellIndex = -1;
 
-    public void Build(Transform canvasTransform)
+    internal RectTransform DragLayer => dragLayer;
+
+    public void Build(Transform canvasTransform, CardCatalog catalog)
     {
+        cardCatalog = catalog;
         GenerateHands();
         CreateBackground(canvasTransform);
         CreateBoard(canvasTransform);
@@ -45,17 +57,52 @@ public sealed class GameView : MonoBehaviour
         CreateTurnText(canvasTransform);
         CreateBackButton(canvasTransform);
         CreateRestartButton(canvasTransform);
+        CreateDragLayer(canvasTransform);
         turnText.text = "Turno: Jugador - elige una carta";
         RefreshView();
     }
 
     private void GenerateHands()
     {
+        if (cardCatalog != null && cardCatalog.Count >= HandSize)
+        {
+            List<CardVisualData> playerCards = cardCatalog.CreateRandomHand(random, HandSize);
+            List<CardVisualData> enemyCards = cardCatalog.CreateRandomHand(random, HandSize);
+
+            for (int index = 0; index < HandSize; index++)
+            {
+                playerHand[index] = playerCards[index];
+                enemyHand[index] = enemyCards[index];
+            }
+
+            return;
+        }
+
         for (int index = 0; index < HandSize; index++)
         {
-            playerHand[index] = Card.CreateRandom(random);
-            enemyHand[index] = Card.CreateRandom(random);
+            playerHand[index] = CreateRandomVisualCard();
+            enemyHand[index] = CreateRandomVisualCard();
         }
+    }
+
+    private CardVisualData CreateRandomVisualCard()
+    {
+        if (cardCatalog != null && cardCatalog.Count > 0)
+        {
+            return cardCatalog.CreateRandomCard(random);
+        }
+
+        if (!missingCatalogWarningLogged)
+        {
+            Debug.LogWarning("RatLab: no CardCatalog found. Using temporary random cards without artwork.");
+            missingCatalogWarningLogged = true;
+        }
+        return new CardVisualData(
+            "Generated",
+            1,
+            Card.CreateRandom(random),
+            null,
+            null);
     }
 
     private void CreateBackground(Transform canvasTransform)
@@ -112,20 +159,17 @@ public sealed class GameView : MonoBehaviour
             $"Cell_{cellIndex + 1}",
             typeof(RectTransform),
             typeof(Image),
-            typeof(Button));
+            typeof(BoardDropCellView));
 
         cellObject.transform.SetParent(boardTransform, false);
 
         Image image = cellObject.GetComponent<Image>();
-        Button button = cellObject.GetComponent<Button>();
-        button.targetGraphic = image;
-        button.transition = Selectable.Transition.None;
+        BoardDropCellView dropCell = cellObject.GetComponent<BoardDropCellView>();
+        dropCell.Initialize(this, cellIndex);
 
-        int capturedCellIndex = cellIndex;
-        button.onClick.AddListener(() => PlaceSelectedCard(capturedCellIndex));
-
+        Image artwork = CreateArtworkImage(cellObject.transform);
         TextMeshProUGUI[] labels = CreateCardLabels(cellObject.transform, 22f);
-        return new BoardCellView(button, image, labels);
+        return new BoardCellView(image, artwork, labels);
     }
 
     private void CreateHands(Transform canvasTransform)
@@ -183,13 +227,14 @@ public sealed class GameView : MonoBehaviour
         return handObject.transform;
     }
 
-    private HandCardView CreateHandCard(Transform handTransform, Owner owner, int cardIndex, Card card)
+    private HandCardView CreateHandCard(Transform handTransform, Owner owner, int cardIndex, CardVisualData data)
     {
         GameObject cardObject = new GameObject(
             $"{owner}Card_{cardIndex + 1}",
             typeof(RectTransform),
             typeof(Image),
-            typeof(Button));
+            typeof(CanvasGroup),
+            typeof(DraggableCardView));
 
         cardObject.transform.SetParent(handTransform, false);
 
@@ -197,26 +242,57 @@ public sealed class GameView : MonoBehaviour
         cardRect.sizeDelta = new Vector2(150f, 190f);
 
         Image image = cardObject.GetComponent<Image>();
-        Button button = cardObject.GetComponent<Button>();
-        button.targetGraphic = image;
-        button.transition = Selectable.Transition.None;
+        DraggableCardView draggable = cardObject.GetComponent<DraggableCardView>();
+        draggable.Initialize(this, owner, cardIndex);
 
-        int capturedCardIndex = cardIndex;
-        button.onClick.AddListener(() => SelectCard(owner, capturedCardIndex));
-
+        Image artwork = CreateArtworkImage(cardObject.transform);
+        SetArtworkOwnerColor(artwork, GetOwnerColor(owner));
         TextMeshProUGUI[] labels = CreateCardLabels(cardObject.transform, 24f);
-        SetCardLabels(labels, card);
-        return new HandCardView(button, image, labels);
+        return new HandCardView(draggable, image, artwork, labels);
+    }
+
+    private Image CreateArtworkImage(Transform parent)
+    {
+        GameObject artworkObject = new GameObject(
+            "Artwork",
+            typeof(RectTransform),
+            typeof(Image));
+
+        artworkObject.transform.SetParent(parent, false);
+
+        RectTransform artworkRect = artworkObject.GetComponent<RectTransform>();
+        artworkRect.anchorMin = Vector2.zero;
+        artworkRect.anchorMax = Vector2.one;
+        artworkRect.offsetMin = Vector2.zero;
+        artworkRect.offsetMax = Vector2.zero;
+
+        Image artwork = artworkObject.GetComponent<Image>();
+        artwork.preserveAspect = false;
+        artwork.raycastTarget = false;
+        return artwork;
+    }
+
+    private void SetArtworkOwnerColor(Image artwork, Color ownerColor)
+    {
+        Outline outline = artwork.GetComponent<Outline>();
+        if (outline == null)
+        {
+            outline = artwork.gameObject.AddComponent<Outline>();
+        }
+
+        outline.effectColor = ownerColor;
+        outline.effectDistance = new Vector2(3f, 3f);
+        outline.useGraphicAlpha = false;
     }
 
     private TextMeshProUGUI[] CreateCardLabels(Transform cardTransform, float fontSize)
     {
         return new[]
         {
-            CreateSideLabel(cardTransform, "North", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -12f), new Vector2(70f, 30f), fontSize),
-            CreateSideLabel(cardTransform, "East", new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-10f, 0f), new Vector2(55f, 30f), fontSize),
-            CreateSideLabel(cardTransform, "South", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 12f), new Vector2(70f, 30f), fontSize),
-            CreateSideLabel(cardTransform, "West", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(10f, 0f), new Vector2(55f, 30f), fontSize)
+            CreateSideLabel(cardTransform, "North", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -4f), new Vector2(70f, 24f), fontSize),
+            CreateSideLabel(cardTransform, "East", new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-3f, 0f), new Vector2(28f, 24f), fontSize),
+            CreateSideLabel(cardTransform, "South", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 4f), new Vector2(70f, 24f), fontSize),
+            CreateSideLabel(cardTransform, "West", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(3f, 0f), new Vector2(28f, 24f), fontSize)
         };
     }
 
@@ -361,31 +437,77 @@ public sealed class GameView : MonoBehaviour
         label.text = "Jugar de nuevo";
     }
 
-    private void SelectCard(Owner owner, int cardIndex)
+    private void CreateDragLayer(Transform canvasTransform)
     {
-        if (gameOver || enemyThinking || owner != Owner.Player || currentTurn != Owner.Player || IsCardUsed(owner, cardIndex))
-        {
-            return;
-        }
+        GameObject dragLayerObject = new GameObject(
+            "DragLayer",
+            typeof(RectTransform),
+            typeof(CanvasGroup));
 
-        selectedCardIndex = cardIndex;
-        Card[] hand = owner == Owner.Player ? playerHand : enemyHand;
-        selectedCard = hand[cardIndex];
-        turnText.text = $"Turno: {GetOwnerLabel(currentTurn)} - elige una casilla vacía";
-        RefreshView();
+        dragLayerObject.transform.SetParent(canvasTransform, false);
+
+        dragLayer = dragLayerObject.GetComponent<RectTransform>();
+        dragLayer.anchorMin = Vector2.zero;
+        dragLayer.anchorMax = Vector2.one;
+        dragLayer.offsetMin = Vector2.zero;
+        dragLayer.offsetMax = Vector2.zero;
+        dragLayer.SetAsLastSibling();
+
+        CanvasGroup canvasGroup = dragLayerObject.GetComponent<CanvasGroup>();
+        canvasGroup.blocksRaycasts = false;
+        canvasGroup.interactable = false;
     }
 
-    private void PlaceSelectedCard(int cellIndex)
+    internal bool CanBeginDrag(DraggableCardView card)
     {
-        if (gameOver || enemyThinking || currentTurn != Owner.Player || selectedCardIndex < 0 || selectedCard == null || !board.IsEmpty(cellIndex))
+        return !gameOver
+            && !enemyThinking
+            && currentTurn == Owner.Player
+            && activePlayerDrag == null
+            && card.Owner == Owner.Player
+            && !IsCardUsed(Owner.Player, card.CardIndex);
+    }
+
+    internal void NotifyDragStarted(DraggableCardView card)
+    {
+        activePlayerDrag = card;
+        highlightedCellIndex = -1;
+        RefreshBoardView();
+    }
+
+    internal void NotifyDragEnded(DraggableCardView card)
+    {
+        if (activePlayerDrag != card)
         {
             return;
         }
 
-        var flippedCellIndices = BoardLogic.PlaceCard(board, cellIndex, selectedCard, Owner.Player);
-        MarkCardAsUsed(Owner.Player, selectedCardIndex);
-        selectedCardIndex = -1;
-        selectedCard = null;
+        activePlayerDrag = null;
+        highlightedCellIndex = -1;
+        card.SetCanDrag(false);
+        returningPlayerCard = card;
+        cardReturnCoroutine = StartCoroutine(ReturnCardToHand(card));
+        RefreshBoardView();
+    }
+
+    internal void HandleCardDrop(DraggableCardView card, int cellIndex)
+    {
+        if (activePlayerDrag != card
+            || gameOver
+            || enemyThinking
+            || currentTurn != Owner.Player
+            || !board.IsEmpty(cellIndex))
+        {
+            return;
+        }
+
+        CardVisualData placedVisual = playerHand[card.CardIndex];
+        var flippedCellIndices = BoardLogic.PlaceCard(board, cellIndex, placedVisual.Values, Owner.Player);
+        boardSprites[cellIndex] = placedVisual.FrontSprite;
+        MarkCardAsUsed(Owner.Player, card.CardIndex);
+        activePlayerDrag = null;
+        highlightedCellIndex = -1;
+        card.CompleteDrop();
 
         if (board.IsFull)
         {
@@ -399,6 +521,36 @@ public sealed class GameView : MonoBehaviour
         turnText.text = $"Turno: Enemigo pensando... volteadas: {flippedCellIndices.Count}";
         RefreshView();
         enemyTurnCoroutine = StartCoroutine(PlayEnemyTurnAfterDelay());
+    }
+
+    internal void HandleCellPointerEnter(int cellIndex)
+    {
+        if (activePlayerDrag == null || gameOver || enemyThinking || !board.IsEmpty(cellIndex))
+        {
+            return;
+        }
+
+        highlightedCellIndex = cellIndex;
+        RefreshBoardView();
+    }
+
+    internal void HandleCellPointerExit(int cellIndex)
+    {
+        if (highlightedCellIndex != cellIndex)
+        {
+            return;
+        }
+
+        highlightedCellIndex = -1;
+        RefreshBoardView();
+    }
+
+    private IEnumerator ReturnCardToHand(DraggableCardView card)
+    {
+        yield return card.ReturnToHand(0.2f);
+        cardReturnCoroutine = null;
+        returningPlayerCard = null;
+        RefreshView();
     }
 
     private IEnumerator PlayEnemyTurnAfterDelay()
@@ -417,7 +569,7 @@ public sealed class GameView : MonoBehaviour
         {
             if (!usedEnemyCards[index])
             {
-                availableCards.Add(enemyHand[index]);
+                availableCards.Add(enemyHand[index].Values);
             }
         }
 
@@ -436,12 +588,29 @@ public sealed class GameView : MonoBehaviour
             yield break;
         }
 
+        int usedCardIndex = FindEnemyCardIndex(selectedMove.Card);
+        CardVisualData selectedVisual = enemyHand[usedCardIndex];
+        enemyCardViews[usedCardIndex].Draggable.SetVisible(false);
+        activeEnemyAnimationObject = CreateEnemyAnimationCard(selectedVisual);
+        yield return AnimateEnemyCardToCell(
+            activeEnemyAnimationObject,
+            enemyCardViews[usedCardIndex].Draggable.GetComponent<RectTransform>(),
+            boardCellViews[selectedMove.CellIndex].Image.rectTransform,
+            0.5f);
+
+        if (activeEnemyAnimationObject != null)
+        {
+            activeEnemyAnimationObject.SetActive(false);
+            Destroy(activeEnemyAnimationObject);
+            activeEnemyAnimationObject = null;
+        }
+
         var flippedCellIndices = BoardLogic.PlaceCard(
             board,
             selectedMove.CellIndex,
             selectedMove.Card,
             Owner.Enemy);
-        int usedCardIndex = Array.IndexOf(enemyHand, selectedMove.Card);
+        boardSprites[selectedMove.CellIndex] = selectedVisual.FrontSprite;
         MarkCardAsUsed(Owner.Enemy, usedCardIndex);
 
         if (board.IsFull)
@@ -457,33 +626,118 @@ public sealed class GameView : MonoBehaviour
         RefreshView();
     }
 
+    private GameObject CreateEnemyAnimationCard(CardVisualData data)
+    {
+        GameObject cardObject = new GameObject(
+            "EnemyCardAnimation",
+            typeof(RectTransform),
+            typeof(Image));
+
+        cardObject.transform.SetParent(dragLayer, false);
+
+        RectTransform cardRect = cardObject.GetComponent<RectTransform>();
+        cardRect.anchorMin = new Vector2(0.5f, 0.5f);
+        cardRect.anchorMax = new Vector2(0.5f, 0.5f);
+        cardRect.pivot = new Vector2(0.5f, 0.5f);
+        cardRect.sizeDelta = boardCellViews[0].Image.rectTransform.rect.size;
+
+        Image image = cardObject.GetComponent<Image>();
+        image.color = EnemyColor;
+        image.raycastTarget = false;
+
+        Image artwork = CreateArtworkImage(cardObject.transform);
+        artwork.sprite = data.FrontSprite;
+        SetArtworkOwnerColor(artwork, EnemyColor);
+        SetCardLabels(CreateCardLabels(cardObject.transform, 22f), data.Values);
+        cardObject.transform.SetAsLastSibling();
+        return cardObject;
+    }
+
+    private int FindEnemyCardIndex(Card card)
+    {
+        for (int index = 0; index < HandSize; index++)
+        {
+            if (enemyHand[index].Values == card)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private IEnumerator AnimateEnemyCardToCell(
+        GameObject cardObject,
+        RectTransform sourceRect,
+        RectTransform targetRect,
+        float duration)
+    {
+        RectTransform animationRect = cardObject.GetComponent<RectTransform>();
+        Vector2 sourceScreenPosition = RectTransformUtility.WorldToScreenPoint(null, sourceRect.position);
+        Vector2 targetScreenPosition = RectTransformUtility.WorldToScreenPoint(null, targetRect.position);
+
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            dragLayer,
+            sourceScreenPosition,
+            null,
+            out Vector2 sourcePosition);
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            dragLayer,
+            targetScreenPosition,
+            null,
+            out Vector2 targetPosition);
+
+        animationRect.anchoredPosition = sourcePosition;
+        AnimationCurve curve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float normalizedTime = Mathf.Clamp01(elapsed / duration);
+            animationRect.anchoredPosition = Vector2.LerpUnclamped(
+                sourcePosition,
+                targetPosition,
+                curve.Evaluate(normalizedTime));
+            yield return null;
+        }
+
+        animationRect.anchoredPosition = targetPosition;
+    }
+
     private void RefreshView()
     {
         RefreshHand(Owner.Player, playerHand, usedPlayerCards, playerCardViews);
         RefreshHand(Owner.Enemy, enemyHand, usedEnemyCards, enemyCardViews);
+        RefreshBoardView();
+    }
 
+    private void RefreshBoardView()
+    {
         for (int index = 0; index < Board.CellCount; index++)
         {
             BoardCellView cellView = boardCellViews[index];
 
             if (board.IsEmpty(index))
             {
-                cellView.Image.color = EmptyCellColor;
+                cellView.Image.color = highlightedCellIndex == index
+                    ? HighlightCellColor
+                    : EmptyCellColor;
+                cellView.Artwork.sprite = null;
+                cellView.Artwork.enabled = false;
                 SetCardLabels(cellView.Labels, null);
-                cellView.Button.interactable = !gameOver
-                    && !enemyThinking
-                    && currentTurn == Owner.Player
-                    && selectedCardIndex >= 0;
                 continue;
             }
 
             cellView.Image.color = GetOwnerColor(board.GetOwner(index));
+            cellView.Artwork.sprite = boardSprites[index];
+            cellView.Artwork.enabled = boardSprites[index] != null;
+            SetArtworkOwnerColor(cellView.Artwork, GetOwnerColor(board.GetOwner(index)));
             SetCardLabels(cellView.Labels, board.GetCard(index));
-            cellView.Button.interactable = false;
         }
     }
 
-    private void RefreshHand(Owner owner, Card[] hand, bool[] usedCards, HandCardView[] views)
+    private void RefreshHand(Owner owner, CardVisualData[] hand, bool[] usedCards, HandCardView[] views)
     {
         for (int index = 0; index < HandSize; index++)
         {
@@ -493,18 +747,20 @@ public sealed class GameView : MonoBehaviour
             {
                 color = Color.Lerp(color, Color.black, 0.45f);
             }
-            else if (owner == currentTurn && selectedCardIndex == index)
-            {
-                color = Color.Lerp(color, Color.white, 0.35f);
-            }
 
-            SetCardLabels(views[index].Labels, hand[index]);
+            views[index].Draggable.SetVisible(true);
+            CardVisualData data = hand[index];
+            bool showFace = owner == Owner.Player;
+            views[index].Artwork.sprite = showFace ? data.FrontSprite : data.BackSprite;
+            views[index].Artwork.enabled = views[index].Artwork.sprite != null;
+            SetArtworkOwnerColor(views[index].Artwork, GetOwnerColor(owner));
+            SetCardLabels(views[index].Labels, showFace ? data.Values : null);
             views[index].Image.color = color;
-            views[index].Button.interactable = !gameOver
+            views[index].Draggable.SetCanDrag(!gameOver
                 && !enemyThinking
                 && owner == Owner.Player
                 && currentTurn == Owner.Player
-                && !usedCards[index];
+                && !usedCards[index]);
         }
     }
 
@@ -520,10 +776,10 @@ public sealed class GameView : MonoBehaviour
             return;
         }
 
-        labels[0].text = $"N {card.North}";
-        labels[1].text = $"E {card.East}";
-        labels[2].text = $"S {card.South}";
-        labels[3].text = $"O {card.West}";
+        labels[0].text = card.North.ToString();
+        labels[1].text = card.East.ToString();
+        labels[2].text = card.South.ToString();
+        labels[3].text = card.West.ToString();
     }
 
     private bool IsCardUsed(Owner owner, int cardIndex)
@@ -551,12 +807,37 @@ public sealed class GameView : MonoBehaviour
             enemyTurnCoroutine = null;
         }
 
+        if (cardReturnCoroutine != null)
+        {
+            StopCoroutine(cardReturnCoroutine);
+            cardReturnCoroutine = null;
+        }
+
+        if (returningPlayerCard != null)
+        {
+            returningPlayerCard.CancelImmediately();
+            returningPlayerCard = null;
+        }
+
+        if (activePlayerDrag != null)
+        {
+            activePlayerDrag.CancelImmediately();
+            activePlayerDrag = null;
+        }
+
+        if (activeEnemyAnimationObject != null)
+        {
+            activeEnemyAnimationObject.SetActive(false);
+            Destroy(activeEnemyAnimationObject);
+            activeEnemyAnimationObject = null;
+        }
+
         board = new Board();
+        Array.Clear(boardSprites, 0, boardSprites.Length);
         Array.Clear(usedPlayerCards, 0, usedPlayerCards.Length);
         Array.Clear(usedEnemyCards, 0, usedEnemyCards.Length);
         currentTurn = Owner.Player;
-        selectedCardIndex = -1;
-        selectedCard = null;
+        highlightedCellIndex = -1;
         gameOver = false;
         enemyThinking = false;
         GenerateHands();
@@ -578,11 +859,6 @@ public sealed class GameView : MonoBehaviour
     private void LoadMainMenuScene()
     {
         SceneManager.LoadScene(mainMenuSceneName);
-    }
-
-    private static string GetOwnerLabel(Owner owner)
-    {
-        return owner == Owner.Player ? "Jugador" : "Enemigo";
     }
 
     private static string GetWinnerLabel(Owner owner)
@@ -617,29 +893,31 @@ public sealed class GameView : MonoBehaviour
 
     private sealed class HandCardView
     {
-        public HandCardView(Button button, Image image, TextMeshProUGUI[] labels)
+        public HandCardView(DraggableCardView draggable, Image image, Image artwork, TextMeshProUGUI[] labels)
         {
-            Button = button;
+            Draggable = draggable;
             Image = image;
+            Artwork = artwork;
             Labels = labels;
         }
 
-        public Button Button { get; }
+        public DraggableCardView Draggable { get; }
         public Image Image { get; }
+        public Image Artwork { get; }
         public TextMeshProUGUI[] Labels { get; }
     }
 
     private sealed class BoardCellView
     {
-        public BoardCellView(Button button, Image image, TextMeshProUGUI[] labels)
+        public BoardCellView(Image image, Image artwork, TextMeshProUGUI[] labels)
         {
-            Button = button;
             Image = image;
+            Artwork = artwork;
             Labels = labels;
         }
 
-        public Button Button { get; }
         public Image Image { get; }
+        public Image Artwork { get; }
         public TextMeshProUGUI[] Labels { get; }
     }
 }

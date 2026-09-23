@@ -2,16 +2,22 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
+using RatLab.Data;
 
 public sealed class GameBootstrap : MonoBehaviour
 {
+    [SerializeField] private CardCatalog cardCatalog;
+
     private void Awake()
     {
         CreateEventSystemIfNeeded();
 
         Canvas canvas = CreateCanvas();
         GameView gameView = gameObject.AddComponent<GameView>();
-        gameView.Build(canvas.transform);
+        CardCatalog runtimeCatalog = cardCatalog != null
+            ? cardCatalog
+            : Resources.Load<CardCatalog>("Cards/CardCatalog");
+        gameView.Build(canvas.transform, runtimeCatalog);
     }
 
     private void CreateEventSystemIfNeeded()

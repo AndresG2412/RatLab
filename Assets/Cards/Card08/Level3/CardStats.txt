@@ -1,0 +1,5 @@
+# Valores de Card08 - Nivel 3
+Norte=1
+Este=1
+Sur=1
+Oeste=1
